@@ -1,5 +1,5 @@
 
-config.toml
+config*.toml
 bin/
 
 # HTTPS
@@ -7,4 +7,8 @@ server.crt
 server.key
 
 # JWT signing key
+symmetric_key_file
 symmetric_keyfile
+
+# Gnome builder files
+.buildconfig

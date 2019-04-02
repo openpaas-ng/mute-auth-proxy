@@ -26,6 +26,7 @@ import (
 	"github.com/coast-team/mute-auth-proxy/auth"
 	"github.com/coast-team/mute-auth-proxy/config"
 	"github.com/coast-team/mute-auth-proxy/helper"
+	"github.com/dgraph-io/badger"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/spf13/cobra"
@@ -45,13 +46,19 @@ var runCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(runCmd)
 	runCmd.Flags().StringP("config", "c", "config.toml", "The config file to load")
-	runCmd.Flags().StringP("keyfile", "k", "symmetric_keyfile", "The key file to load")
+	runCmd.Flags().StringP("keyfile", "k", "symmetric_key_file", "The key file (HMAC with SHA256 used for JWT signing) to load")
 }
 
 func run(cmd *cobra.Command) {
 	var err error
-	confFilename := cmd.Flag("config").Value.String()
-	keyfilepath := cmd.Flag("keyfile").Value.String()
+	confFilename, err := cmd.Flags().GetString("config")
+	if err != nil {
+		log.Fatalf("Couldn't extract flag, error is : %s", err)
+	}
+	keyfilepath, err := cmd.Flags().GetString("keyfile")
+	if err != nil {
+		log.Fatalf("Couldn't extract flag, error is : %s", err)
+	}
 	keyData, err := helper.ReadFile(keyfilepath)
 	if err != nil {
 		log.Fatalf("Couldn't load the keyfile.\nError was: %s", err)
@@ -68,7 +75,19 @@ func run(cmd *cobra.Command) {
 	router.HandleFunc("/auth/github", auth.MakeGithubLoginHandler(conf))
 	router.HandleFunc("/coniks", api.MakeConiksProxyHandler(conf))
 	router.PathPrefix("/botstorage").HandlerFunc(api.MakeBotStorageProxyHandler(proxy))
-	handlerFunc := handlers.CORS(handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}), handlers.AllowedMethods([]string{"GET", "POST", "OPTIONS"}), handlers.AllowedOrigins(conf.AllowedOrigins))(router)
+	opts := badger.DefaultOptions
+	opts.Dir = conf.KeyServerPath
+	opts.ValueDir = conf.KeyServerPath
+	db, err := badger.Open(opts)
+	if err != nil {
+		log.Fatalf("Open Badger DB: %s", err)
+	}
+	defer db.Close()
+	router.HandleFunc("/public-key/{login}", api.MakePublicKeyGETAllHandler(db)).Methods("GET")
+	router.HandleFunc("/public-key/{login}/{device}", api.MakePublicKeyGETHandler(db)).Methods("GET")
+	router.HandleFunc("/public-key", api.MakePublicKeyPOSTHandler(db)).Methods("POST")
+	router.HandleFunc("/public-key/{login}/{device}", api.MakePublicKeyPUTHandler(db)).Methods("PUT")
+	handlerFunc := handlers.CORS(handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}), handlers.AllowedMethods([]string{"GET", "POST", "OPTIONS", "PUT", "DELETE"}), handlers.AllowedOrigins(conf.AllowedOrigins))(router)
 	err = http.ListenAndServe(fmt.Sprintf(":%d", conf.Port), handlerFunc)
 	if err != nil {
 		log.Fatalf("ListenAndServe: %s", err)
